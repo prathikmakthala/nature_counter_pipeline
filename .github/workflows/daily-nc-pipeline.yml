@@ -61,3 +61,4 @@ jobs:
       - name: Run Nature Counter pipeline
         if: github.event_name == 'workflow_dispatch' || steps.pacific_gate.outputs.run == 'true'
         run: python -m pipeline_project
+
