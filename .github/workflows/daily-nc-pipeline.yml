@@ -27,7 +27,7 @@ jobs:
         run: |
           export TZ=America/Los_Angeles
           current_hour=$(date +'%H')
-          if [ "$current_hour" = "21" ]; then
+          if [ "$current_hour" = "14" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Running pipeline at $(date)"
           else
