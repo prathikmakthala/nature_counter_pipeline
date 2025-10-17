@@ -1,0 +1,61 @@
+name: Daily Nature Counter Pipeline
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    env:
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+      DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+      OUTPUT_NAME: NC-DA-Journal-Data.xlsx
+      RUN_MODE: inc
+      SA_JSON_PATH: drive-sa.json
+      DRIVE_SA_JSON: ${{ secrets.DRIVE_SA_JSON }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine Pacific Time execution window
+        id: pacific_gate
+        run: |
+          export TZ=America/Los_Angeles
+          current_hour=$(date +'%H')
+          if [ "$current_hour" = "21" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Running pipeline at $(date)"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Current Pacific hour $current_hour is outside of 21. Skipping pipeline run."
+          fi
+
+      - name: Validate required secrets
+        if: steps.pacific_gate.outputs.run == 'true'
+        run: |
+          python - <<'PY'
+import os
+required = ("MONGO_URI", "DRIVE_FOLDER_ID", "DRIVE_SA_JSON")
+missing = [k for k in required if not os.getenv(k)]
+if missing:
+    raise SystemExit(f"Missing required secrets: {', '.join(missing)}")
+PY
+
+      - name: Set up Python
+        if: steps.pacific_gate.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        if: steps.pacific_gate.outputs.run == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Nature Counter pipeline
+        if: steps.pacific_gate.outputs.run == 'true'
+        run: python -m pipeline_project
