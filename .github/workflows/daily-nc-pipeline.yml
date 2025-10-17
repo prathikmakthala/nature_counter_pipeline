@@ -2,8 +2,8 @@ name: Daily Nature Counter Pipeline
 
 on:
   schedule:
-    - cron: '0 4 * * *'   # 9pm PT (DST)
-    - cron: '0 5 * * *'   # 9pm PT (Standard Time)
+    - cron: '0 4 * * *'   # 9pm PT during Daylight Time
+    - cron: '0 5 * * *'   # 9pm PT during Standard Time
   workflow_dispatch: {}    # allow manual run anytime
 
 jobs:
@@ -16,11 +16,12 @@ jobs:
       RUN_MODE: inc
       SA_JSON_PATH: drive-sa.json
       DRIVE_SA_JSON: ${{ secrets.DRIVE_SA_JSON }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Only gate scheduled runs by PT hour; manual runs skip this step entirely
+      # Gate only scheduled runs by Pacific hour; manual runs skip this gate
       - name: Determine Pacific Time execution window
         if: github.event_name == 'schedule'
         id: pacific_gate
@@ -37,12 +38,13 @@ jobs:
       - name: Validate required secrets
         if: github.event_name == 'workflow_dispatch' || steps.pacific_gate.outputs.run == 'true'
         run: |
-          python - <<'PY'
-import os
-missing = [k for k in ("MONGO_URI","DRIVE_FOLDER_ID","DRIVE_SA_JSON") if not os.getenv(k)]
-if missing: raise SystemExit(f"Missing required secrets: {', '.join(missing)}")
-print("Secrets OK")
-PY
+          for k in MONGO_URI DRIVE_FOLDER_ID DRIVE_SA_JSON; do
+            if [ -z "${!k}" ]; then
+              echo "Missing required secret: $k"
+              exit 1
+            fi
+          done
+          echo "Secrets OK"
 
       - name: Set up Python
         if: github.event_name == 'workflow_dispatch' || steps.pacific_gate.outputs.run == 'true'
