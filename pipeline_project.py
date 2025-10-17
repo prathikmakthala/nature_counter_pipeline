@@ -253,6 +253,12 @@ def run_once(cfg: Dict = None):
     output_name     = cfg.get("OUTPUT_NAME") or os.getenv("OUTPUT_NAME", "NC-DA-Journal-Data.xlsx")
     run_mode        = (cfg.get("RUN_MODE") or os.getenv("RUN_MODE", "inc")).lower()
 
+    log.info(
+        "Starting Nature Counter pipeline in %s mode (destination folder: %s)",
+        run_mode,
+        drive_folder_id,
+    )
+
     sa_path = _ensure_sa_file(cfg)
     drive, sa_email = _drive_client(sa_path)
 
@@ -272,6 +278,7 @@ def run_once(cfg: Dict = None):
     last_oid = None if run_mode == "full" else load_watermark_from_drive_excel(drive, drive_folder_id, output_name)
 
     raw, _ = fetch(db, last_oid)
+    log.info("Fetched %d rows from Mongo", 0 if raw is None else len(raw))
     if raw is None or raw.empty:
         log.info("ℹ️ No new data; nothing to upload.")
         return
