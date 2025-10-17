@@ -2,8 +2,9 @@ name: Daily Nature Counter Pipeline
 
 on:
   schedule:
-    - cron: '0 4 * * *'
-    - cron: '0 5 * * *'
+    # UTC-based: these two together approximate 9pm Pacific across DST
+    - cron: "0 4 * * *"  # 9pm PT during Daylight Time (UTC-7)
+    - cron: "0 5 * * *"  # 9pm PT during Standard Time (UTC-8)
   workflow_dispatch:
 
 jobs:
@@ -16,6 +17,7 @@ jobs:
       RUN_MODE: inc
       SA_JSON_PATH: drive-sa.json
       DRIVE_SA_JSON: ${{ secrets.DRIVE_SA_JSON }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,26 +38,37 @@ jobs:
       - name: Validate required secrets
         if: steps.pacific_gate.outputs.run == 'true'
         run: |
-          python - <<'PY'
-import os
-required = ("MONGO_URI", "DRIVE_FOLDER_ID", "DRIVE_SA_JSON")
-missing = [k for k in required if not os.getenv(k)]
-if missing:
-    raise SystemExit(f"Missing required secrets: {', '.join(missing)}")
-PY
+          test -n "$MONGO_URI" || { echo "Missing MONGO_URI"; exit 1; }
+          test -n "$DRIVE_FOLDER_ID" || { echo "Missing DRIVE_FOLDER_ID"; exit 1; }
+          test -n "$DRIVE_SA_JSON"   || { echo "Missing DRIVE_SA_JSON"; exit 1; }
 
       - name: Set up Python
         if: steps.pacific_gate.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         if: steps.pacific_gate.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install pandas pymongo openpyxl tzdata \
+                     google-api-python-client google-auth google-auth-httplib2
+
+      # Your script writes the SA JSON from env or expects SA_JSON_PATH.
+      # If your code *requires* the file to exist (not inline), uncomment below:
+      # - name: Write Drive Service Account JSON to file
+      #   if: steps.pacific_gate.outputs.run == 'true'
+      #   run: |
+      #     printf '%s' "$DRIVE_SA_JSON" > "$SA_JSON_PATH"
 
       - name: Run Nature Counter pipeline
         if: steps.pacific_gate.outputs.run == 'true'
-        run: python -m pipeline_project
+        run: |
+          # Use the filename that exists in your repo root:
+          # If your main script is pipeline_project.py:
+          python -m pipeline_project
+          # If it's pipeline.py instead, replace with:
+          # python -m pipeline
+          # If you wired config.py as entry point, use:
+          # python config.py
