@@ -36,8 +36,9 @@ NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY PR GU VI
 """.split())
 
 FINAL_COLS = [
-    "journal_id","User Name","User email","Timestamp","End Date Time",
-    "n_Name","City","State","Zip","Country","n_Place","n_Lati","n_Long","n_park_nbr"
+    "Status", "User Name", "User email", "Timestamp", "End Date Time", "n_Duration",
+    "n_Name", "City", "State", "Zip", "Country", "n_Place", "n_Lati", "n_Long",
+    "n_park_nb", "n_activity", "n_notes"
 ]
 
 def _require(cfg: Dict, key: str) -> str:
@@ -146,11 +147,10 @@ def agg_pipeline(match: dict):
             ]},
         }},
         {"$project": {
-            "_id": 0,
             "journal_id": {"$toString": "$_id"},
-
             "Timestamp": "$start_time",
             "End Date Time": "$end_time",
+            "n_Duration": {"$ifNull": ["$n_Duration", ""]},
 
             "User Name": {"$ifNull": ["$u.name", ""]},
             "User email": {"$ifNull": ["$u.email", ""]},
@@ -174,7 +174,9 @@ def agg_pipeline(match: dict):
             "n_Long": {"$ifNull": ["$loc.coordinates.lng",
                        {"$ifNull": ["$loc.coordinates.longitude", "$lng_from_geojson"]}]},
 
-            "n_park_nbr": {"$ifNull": ["$loc.parkNumber", {"$arrayElemAt": ["$loc.category", 0]}]}
+            "n_park_nb": {"$ifNull": ["$loc.parkNumber", {"$arrayElemAt": ["$loc.category", 0]}]},
+            "n_activity": {"$ifNull": ["$n_activity", ""]},
+            "n_notes": {"$ifNull": ["$n_notes", ""]}
         }},
         {"$sort": {"journal_id": 1}}
     ]
@@ -189,8 +191,11 @@ def _to_str_timestamp(x):
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame(columns=FINAL_COLS)
+        return pd.DataFrame(columns=["Status"] + [col for col in FINAL_COLS if col != "Status"])
     df = df.copy()
+
+    # Add the blank Status column as the first column
+    df.insert(0, "Status", "")
 
     addr_src  = df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str)
     place_src = df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str)
@@ -210,10 +215,30 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     df["Timestamp"]     = df["Timestamp"].apply(_to_str_timestamp)
     df["End Date Time"] = df["End Date Time"].apply(_to_str_timestamp)
 
-    for c in FINAL_COLS:
+    # Ensure all FINAL_COLS (plus 'Status') exist, adding empty string for missing ones
+    required_cols = ["Status"] + [col for col in FINAL_COLS if col != "Status"]
+    for c in required_cols:
         if c not in df.columns:
             df[c] = ""
-    return df[FINAL_COLS].drop_duplicates(subset=["journal_id"], keep="last")
+    
+    # Drop internal columns used for joining that shouldn't be in final output
+    if '_id' in df.columns:
+        df = df.drop(columns=['_id'])
+
+    # Ensure all FINAL_COLS (plus 'Status') exist, adding empty string for missing ones
+    final_output_cols = ["Status"] + [col for col in FINAL_COLS if col != "Status"]
+    for c in final_output_cols:
+        if c not in df.columns:
+            df[c] = ""
+    
+    # Deduplicate based on journal_id which is still present at this stage
+    df = df.drop_duplicates(subset=["journal_id"], keep="last")
+
+    # If journal_id is not in the final output columns, drop it here
+    if "journal_id" not in final_output_cols and "journal_id" in df.columns:
+        df = df.drop(columns=['journal_id'])
+
+    return df[final_output_cols]
 
 def load_watermark_from_drive_excel(drive, folder: str, out_name: str) -> Optional[str]:
     try:
