@@ -1,0 +1,44 @@
+name: CI Test Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  run-ci-test:
+    runs-on: ubuntu-latest
+    env:
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+      DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+      OUTPUT_NAME: NC-DA-Journal-Data-CI-Test.xlsx # Use a different output name for CI tests
+      RUN_MODE: full # Run in full mode for consistent CI testing
+      SA_JSON_PATH: drive-sa.json
+      DRIVE_SA_JSON: ${{ secrets.DRIVE_SA_JSON }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          for k in MONGO_URI DRIVE_FOLDER_ID DRIVE_SA_JSON; do
+            if [ -z "${!k}" ]; then
+              echo "Missing required secret: $k"
+              exit 1
+            fi
+          done
+          echo "Secrets OK"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Nature Counter pipeline (CI Test)
+        run: python -m pipeline_project
