@@ -4,12 +4,12 @@
 from pipeline_project import run_once
 
 # --- Your hardcoded values (per your request) ---
-MONGO_URI       = "mongodb+srv://dbadmin:natureCounter%401998@nature-counter-server-c.n8xv09r.mongodb.net/NC_dev_db?appName=Nature-Counter-Server-Cluster-1"
-DRIVE_FOLDER_ID = "1qOEBKw0lngpPhApOwkDe-t6M8yFTs29r"
+MONGO_URI       = ""
+DRIVE_FOLDER_ID = ""
 
 # Where the service account JSON lives on your machine.
 # If you'd rather embed the JSON as a GitHub Secret later, leave DRIVE_SA_JSON="" and keep this path.
-SA_JSON_PATH    = "/Users/prathikmakthala/Downloads/my-pipeline-test-040bbc5bc385.json"
+SA_JSON_PATH    = ""
 
 # Inline JSON is optional (useful for CI). Leave as "" for local runs.
 DRIVE_SA_JSON   = ""  # put the *full* JSON string here only if you prefer inline use

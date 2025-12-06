@@ -38,7 +38,7 @@ NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY PR GU VI
 FINAL_COLS = [
     "Status", "User Name", "User email", "Timestamp", "End Date Time", "n_Duration",
     "n_Name", "City", "State", "Zip", "Country", "n_Place", "n_Lati", "n_Long",
-    "n_park_nb", "n_activity", "n_notes"
+    "n_park_nb", "n_activity", "n_notes", "journal_id"
 ]
 
 def _require(cfg: Dict, key: str) -> str:
@@ -194,8 +194,9 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["Status"] + [col for col in FINAL_COLS if col != "Status"])
     df = df.copy()
 
-    # Add the blank Status column as the first column
-    df.insert(0, "Status", "")
+    # Add the blank Status column as the first column, if it doesn't exist
+    if "Status" not in df.columns:
+        df.insert(0, "Status", "")
 
     addr_src  = df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str)
     place_src = df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str)
@@ -233,10 +234,6 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     
     # Deduplicate based on journal_id which is still present at this stage
     df = df.drop_duplicates(subset=["journal_id"], keep="last")
-
-    # If journal_id is not in the final output columns, drop it here
-    if "journal_id" not in final_output_cols and "journal_id" in df.columns:
-        df = df.drop(columns=['journal_id'])
 
     return df[final_output_cols]
 
