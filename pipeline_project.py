@@ -36,9 +36,8 @@ NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY PR GU VI
 """.split())
 
 FINAL_COLS = [
-    "Status", "User Name", "User email", "Timestamp", "End Date Time", "n_Duration",
-    "n_Name", "City", "State", "Zip", "Country", "n_Place", "n_Lati", "n_Long",
-    "n_park_nb", "n_activity", "n_notes", "journal_id"
+    "Status", "User Name", "User email", "Timestamp", "n_Duration",
+    "n_Name", "Zip", "Country", "journal_id"
 ]
 
 def _require(cfg: Dict, key: str) -> str:
@@ -150,7 +149,9 @@ def agg_pipeline(match: dict):
             "journal_id": {"$toString": "$_id"},
             "Timestamp": "$start_time",
             "End Date Time": "$end_time",
-            "n_Duration": {"$ifNull": ["$n_Duration", ""]},
+            "n_Duration": {
+              "$round": [{ "$divide": [{ "$subtract": ["$end_time", "$start_time"] }, 60000] }, 0]
+            },
 
             "User Name": {"$ifNull": ["$u.name", ""]},
             "User email": {"$ifNull": ["$u.email", ""]},
@@ -198,9 +199,10 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     if "Status" not in df.columns:
         df.insert(0, "Status", "")
 
-    addr_src  = df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str)
-    place_src = df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str)
-    address_for_check = addr_src.where(addr_src.str.len() > 0, place_src)
+    # Retain only necessary processing for `Country`
+    # addr_src  = df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str) # No longer in FINAL_COLS, but used by decide_country
+    # place_src = df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str) # No longer in FINAL_COLS, but used by decide_country
+    address_for_check = df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str).where(df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str).str.len() > 0, df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str))
 
     state_series       = df.get("State", pd.Series([""]*len(df), index=df.index)).astype(str)
     loc_country_series = df.get("LocCountry", pd.Series([""]*len(df), index=df.index)).astype(str)
@@ -209,19 +211,17 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         for addr, st, lc in zip(address_for_check, state_series, loc_country_series)
     ]
 
-    df["n_Lati"]  = pd.to_numeric(df.get("n_Lati"), errors="coerce").round(6)
-    df["n_Long"]  = pd.to_numeric(df.get("n_Long"), errors="coerce").round(6)
-    df["n_Place"] = place_src.str.replace(r"\s{2,}", " ", regex=True).str.strip(" ,")
+    # No longer needed as n_Lati, n_Long, n_Place, n_park_nb, n_activity, n_notes are not in FINAL_COLS
+    # df["n_Lati"]  = pd.to_numeric(df.get("n_Lati"), errors="coerce").round(6)
+    # df["n_Long"]  = pd.to_numeric(df.get("n_Long"), errors="coerce").round(6)
+    # df["n_Place"] = place_src.str.replace(r"\s{2,}", " ", regex=True).str.strip(" ,")
 
+    # Timestamp conversion is still needed for 'Timestamp' and 'End Date Time' if they were in FINAL_COLS.
+    # Now only 'Timestamp' is in FINAL_COLS from the original date fields.
     df["Timestamp"]     = df["Timestamp"].apply(_to_str_timestamp)
-    df["End Date Time"] = df["End Date Time"].apply(_to_str_timestamp)
+    # 'End Date Time' is no longer in FINAL_COLS.
+    # df["End Date Time"] = df["End Date Time"].apply(_to_str_timestamp)
 
-    # Ensure all FINAL_COLS (plus 'Status') exist, adding empty string for missing ones
-    required_cols = ["Status"] + [col for col in FINAL_COLS if col != "Status"]
-    for c in required_cols:
-        if c not in df.columns:
-            df[c] = ""
-    
     # Drop internal columns used for joining that shouldn't be in final output
     if '_id' in df.columns:
         df = df.drop(columns=['_id'])
