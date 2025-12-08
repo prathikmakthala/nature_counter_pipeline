@@ -99,6 +99,7 @@ def write_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.D
             valueInputOption='USER_ENTERED',
             body=body
         ).execute()
+        log.info("Google Sheets API response: %s", result)
         log.info("%d cells updated in sheet.", result.get('updatedCells'))
     except HttpError as e:
         log.error("An error occurred writing to the sheet: %s", e)
