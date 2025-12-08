@@ -11,8 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MONGO_URI: ${{ secrets.MONGO_URI }}
-      DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-      OUTPUT_NAME: NC-DA-Journal-Data.xlsx
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       RUN_MODE: inc
       SA_JSON_PATH: drive-sa.json
       DRIVE_SA_JSON: ${{ secrets.DRIVE_SA_JSON }}
