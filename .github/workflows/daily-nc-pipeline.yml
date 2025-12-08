@@ -11,7 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MONGO_URI: ${{ secrets.MONGO_URI }}
-      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+      OUTPUT_NAME: NC-DA-Journal-Data.xlsx
       RUN_MODE: inc
       SA_JSON_PATH: drive-sa.json
       DRIVE_SA_JSON: ${{ secrets.DRIVE_SA_JSON }}
@@ -37,7 +38,7 @@ jobs:
       - name: Validate required secrets
         if: github.event_name == 'workflow_dispatch' || steps.pacific_gate.outputs.run == 'true'
         run: |
-          for k in MONGO_URI SPREADSHEET_ID DRIVE_SA_JSON; do
+          for k in MONGO_URI DRIVE_FOLDER_ID DRIVE_SA_JSON; do
             if [ -z "${!k}" ]; then
               echo "Missing required secret: $k"
               exit 1

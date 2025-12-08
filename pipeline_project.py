@@ -61,15 +61,11 @@ def _ensure_sa_file(cfg: Dict) -> str:
         raise SystemExit(f"Service account JSON not found at SA_JSON_PATH: {sa_path}")
     return sa_path
 
-def _google_client(sa_path: str):
-    creds = Credentials.from_service_account_file(
-        sa_path, 
-        scopes=["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"]
-    )
-    drive_client = build("drive", "v3", credentials=creds)
-    sheets_client = build("sheets", "v4", credentials=creds)
+def _drive_client(sa_path: str):
+    creds = Credentials.from_service_account_file(sa_path, scopes=["https://www.googleapis.com/auth/drive"])
+    drive = build("drive", "v3", credentials=creds)
     sa_email = json.load(open(sa_path))["client_email"]
-    return drive_client, sheets_client, sa_email
+    return drive, sa_email
 
 def _escape_q(s: str) -> str:
     return s.replace("'", "\\'")
@@ -79,50 +75,32 @@ def find_file_id(drive, name: str, folder: str) -> Optional[str]:
     r = drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
     return r["files"][0]["id"] if r.get("files") else None
 
-def write_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.DataFrame) -> None:
-    try:
-        # Clear the existing sheet data
-        sheets_client.spreadsheets().values().clear(
-            spreadsheetId=spreadsheet_id,
-            range=sheet_name
-        ).execute()
+def upload_excel(drive, local_path: str, dest_name: str, folder: str) -> None:
+    fid = find_file_id(drive, dest_name, folder)
+    media = MediaFileUpload(local_path, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", resumable=True)
+    req = drive.files().update(fileId=fid, media_body=media) if fid else \
+          drive.files().create(body={"name": dest_name, "parents": [folder]}, media_body=media, fields="id")
+    while True:
+        try:
+            _, resp = req.next_chunk()
+            if resp:
+                break
+        except HttpError as e:
+            log.warning("Drive upload retry: %s", e)
 
-        # Convert dataframe to a list of lists, including headers
-        data_to_write = [df.columns.values.tolist()] + df.values.tolist()
-
-        body = {
-            'values': data_to_write
-        }
-        result = sheets_client.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id,
-            range=f"{sheet_name}!A1",
-            valueInputOption='USER_ENTERED',
-            body=body
-        ).execute()
-        log.info("Google Sheets API response: %s", result)
-        log.info("%d cells updated in sheet.", result.get('updatedCells'))
-    except HttpError as e:
-        log.error("An error occurred writing to the sheet: %s", e)
-        raise e
-
-def download_sheet_data(sheets_client, spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
-    try:
-        result = sheets_client.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=sheet_name
-        ).execute()
-        
-        values = result.get('values', [])
-        if not values:
-            return pd.DataFrame()
-        
-        # Assume the first row is the header
-        headers = values[0]
-        data = values[1:]
-        return pd.DataFrame(data, columns=headers)
-    except HttpError as e:
-        log.warning("Could not download sheet data: %s", e)
+def download_excel(drive, name: str, folder: str) -> pd.DataFrame:
+    fid = find_file_id(drive, name, folder)
+    if not fid:
         return pd.DataFrame()
+    buf = io.BytesIO()
+    req = drive.files().get_media(fileId=fid)
+    downloader = MediaIoBaseDownload(buf, req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    buf.seek(0)
+    try:
+        return pd.read_excel(buf, dtype=str)
     except Exception:
         return pd.DataFrame()
 
@@ -259,9 +237,9 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
 
     return df[final_output_cols]
 
-def load_watermark_from_sheet(sheets_client, spreadsheet_id: str, sheet_name: str) -> Optional[str]:
+def load_watermark_from_drive_excel(drive, folder: str, out_name: str) -> Optional[str]:
     try:
-        existing = download_sheet_data(sheets_client, spreadsheet_id, sheet_name)
+        existing = download_excel(drive, out_name, folder)
         if existing.empty or "journal_id" not in existing.columns:
             return None
         oids = []
@@ -272,7 +250,7 @@ def load_watermark_from_sheet(sheets_client, spreadsheet_id: str, sheet_name: st
                 continue
         return str(max(oids)) if oids else None
     except Exception as e:
-        log.warning("Could not read watermark from Google Sheet: %s", e)
+        log.warning("Could not read watermark from Drive Excel: %s", e)
         return None
 
 def fetch(db, last_oid: Optional[str]) -> Tuple[pd.DataFrame, Optional[str]]:
@@ -288,17 +266,17 @@ def fetch(db, last_oid: Optional[str]) -> Tuple[pd.DataFrame, Optional[str]]:
 def run_once(cfg: Dict = None):
     """
     Runs one end-to-end pass using cfg (dict) or env vars.
-    Required keys/envs: MONGO_URI, SPREADSHEET_ID, SA_JSON_PATH or DRIVE_SA_JSON
-    Optional: SHEET_NAME (default 'Sheet1'), RUN_MODE (full|inc)
+    Required keys/envs: MONGO_URI, DRIVE_FOLDER_ID, SA_JSON_PATH or DRIVE_SA_JSON
+    Optional: OUTPUT_NAME (default NC-DA-Journal-Data.xlsx), RUN_MODE (full|inc)
     """
     cfg = cfg or {}
-    mongo_uri      = _require(cfg, "MONGO_URI")
-    spreadsheet_id = _require(cfg, "SPREADSHEET_ID")
-    sheet_name     = cfg.get("SHEET_NAME") or os.getenv("SHEET_NAME", "Sheet1")
-    run_mode       = (cfg.get("RUN_MODE") or os.getenv("RUN_MODE", "inc")).lower()
+    mongo_uri       = _require(cfg, "MONGO_URI")
+    drive_folder_id = _require(cfg, "DRIVE_FOLDER_ID")
+    output_name     = cfg.get("OUTPUT_NAME") or os.getenv("OUTPUT_NAME", "NC-DA-Journal-Data.xlsx")
+    run_mode        = (cfg.get("RUN_MODE") or os.getenv("RUN_MODE", "inc")).lower()
 
     sa_path = _ensure_sa_file(cfg)
-    drive, sheets, sa_email = _google_client(sa_path) # drive client is no longer used but kept for now
+    drive, sa_email = _drive_client(sa_path)
 
     # Connectivity checks
     try:
@@ -308,12 +286,12 @@ def run_once(cfg: Dict = None):
         raise SystemExit(f"Mongo connection failed. Check MONGO_URI. Details: {e}")
 
     try:
-        sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        drive.files().get(fileId=drive_folder_id, fields="id").execute()
     except HttpError as e:
-        raise SystemExit(f"Google Sheet not accessible. Share {spreadsheet_id} with {sa_email} (Editor). Details: {e}")
+        raise SystemExit(f"Drive folder not accessible. Share {drive_folder_id} with {sa_email} (Editor). Details: {e}")
 
     db = client[DB_NAME]
-    last_oid = None if run_mode == "full" else load_watermark_from_sheet(sheets, spreadsheet_id, sheet_name)
+    last_oid = None if run_mode == "full" else load_watermark_from_drive_excel(drive, drive_folder_id, output_name)
 
     raw, _ = fetch(db, last_oid)
     if raw is None or raw.empty:
@@ -321,12 +299,14 @@ def run_once(cfg: Dict = None):
         return
 
     cleaned = clean(raw)
-    existing = download_sheet_data(sheets, spreadsheet_id, sheet_name)
+    existing = download_excel(drive, drive_folder_id, output_name)
     out = pd.concat([existing, cleaned], ignore_index=True) if not existing.empty else cleaned
     out = clean(out)
 
-    write_to_sheet(sheets, spreadsheet_id, sheet_name, out)
-    log.info("✅ Successfully wrote %d rows to sheet.", len(out))
+    tmp_path = "NC-out.xlsx"
+    out.to_excel(tmp_path, index=False)
+    upload_excel(drive, tmp_path, output_name, drive_folder_id)
+    log.info("✅ Uploaded %s (%d rows)", output_name, len(out))
 
 if __name__ == "__main__":
     # Fallback to env-only run
