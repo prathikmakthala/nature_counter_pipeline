@@ -37,7 +37,7 @@ jobs:
       - name: Validate required secrets
         if: github.event_name == 'workflow_dispatch' || steps.pacific_gate.outputs.run == 'true'
         run: |
-          for k in MONGO_URI SPREADSHEET_ID DRIVE_SA_JSON; do
+          for k in MONGO_URI DRIVE_FOLDER_ID DRIVE_SA_JSON; do
             if [ -z "${!k}" ]; then
               echo "Missing required secret: $k"
               exit 1

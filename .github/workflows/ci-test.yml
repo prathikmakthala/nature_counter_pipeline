@@ -18,7 +18,7 @@ jobs:
 
       - name: Validate required secrets
         run: |
-          for k in MONGO_URI SPREADSHEET_ID DRIVE_SA_JSON; do
+          for k in MONGO_URI DRIVE_FOLDER_ID DRIVE_SA_JSON; do
             if [ -z "${!k}" ]; then
               echo "Missing required secret: $k"
               exit 1
