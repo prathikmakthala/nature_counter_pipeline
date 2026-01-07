@@ -182,7 +182,7 @@ def agg_pipeline(match: dict):
             "n_Long": {"$ifNull": ["$loc.coordinates.lng",
                        {"$ifNull": ["$loc.coordinates.longitude", "$lng_from_geojson"]}]},
 
-            "n_park_nb": {"$ifNull": ["$loc.parkNumber", {"$arrayElemAt": ["$loc.category", 0]}]},
+            "n_park_nb": "$loc.parkNumber",
             "n_activity": {"$ifNull": ["$n_activity", ""]},
             "n_notes": {"$ifNull": ["$n_notes", ""]}
         }},
