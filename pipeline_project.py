@@ -353,7 +353,7 @@ def run_once(cfg: Dict = None):
     cleaned = clean(raw)
     
     append_to_sheet(sheets, spreadsheet_id, sheet_name, cleaned)
-    send_email_report(cfg, cleaned)
+    # send_email_report(cfg, cleaned)
     
     if new_last_oid:
         save_watermark_to_file(watermark_file, new_last_oid)
