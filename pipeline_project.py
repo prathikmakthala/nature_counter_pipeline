@@ -14,6 +14,9 @@ import os
 import json
 import logging
 import re
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Optional, Tuple, Dict
 
 import pandas as pd
@@ -36,8 +39,9 @@ NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY PR GU VI
 """.split())
 
 FINAL_COLS = [
-    "Status", "User Name", "User email", "Timestamp", "n_Duration",
-    "n_Name", "Zip", "Country", "journal_id"
+    "Status", "User Name", "User email", "Timestamp", "n_Duration", "End Date Time",
+    "n_Name", "City", "State", "Zip", "Country", "n_Place", "n_Lati", "n_Long",
+    "n_park_nb", "n_activity", "n_notes"
 ]
 
 def _require(cfg: Dict, key: str) -> str:
@@ -79,52 +83,33 @@ def find_file_id(drive, name: str, folder: str) -> Optional[str]:
     r = drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
     return r["files"][0]["id"] if r.get("files") else None
 
-def write_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.DataFrame) -> None:
+def append_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.DataFrame) -> None:
     try:
-        # Clear the existing sheet data
-        sheets_client.spreadsheets().values().clear(
-            spreadsheetId=spreadsheet_id,
-            range=sheet_name
-        ).execute()
+        # Check if the sheet is empty to decide if we need to add headers
+        result = sheets_client.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=sheet_name).execute()
+        is_empty = not result.get('values')
 
-        # Convert dataframe to a list of lists, including headers
-        data_to_write = [df.columns.values.tolist()] + df.values.tolist()
+        data_to_write = []
+        if is_empty:
+            data_to_write.append(df.columns.values.tolist())
+        
+        data_to_write.extend(df.values.tolist())
 
-        body = {
-            'values': data_to_write
-        }
-        result = sheets_client.spreadsheets().values().update(
+        body = {'values': data_to_write}
+        result = sheets_client.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
             range=f"{sheet_name}!A1",
             valueInputOption='USER_ENTERED',
+            insertDataOption='INSERT_ROWS',
             body=body
         ).execute()
         log.info("Google Sheets API response: %s", result)
-        log.info("%d cells updated in sheet.", result.get('updatedCells'))
+        log.info("%d cells appended to sheet.", result.get('updates', {}).get('updatedCells'))
     except HttpError as e:
         log.error("An error occurred writing to the sheet: %s", e)
         raise e
 
-def download_sheet_data(sheets_client, spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
-    try:
-        result = sheets_client.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=sheet_name
-        ).execute()
-        
-        values = result.get('values', [])
-        if not values:
-            return pd.DataFrame()
-        
-        # Assume the first row is the header
-        headers = values[0]
-        data = values[1:]
-        return pd.DataFrame(data, columns=headers)
-    except HttpError as e:
-        log.warning("Could not download sheet data: %s", e)
-        return pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
+
 
 def decide_country(address: str, state: str, loc_country: str) -> str:
     c = (loc_country or "").strip()
@@ -214,7 +199,7 @@ def _to_str_timestamp(x):
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame(columns=["Status"] + [col for col in FINAL_COLS if col != "Status"])
+        return pd.DataFrame(columns=FINAL_COLS)
     df = df.copy()
 
     # Add the blank Status column as the first column, if it doesn't exist
@@ -222,10 +207,7 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         df.insert(0, "Status", "")
 
     # Retain only necessary processing for `Country`
-    # addr_src  = df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str) # No longer in FINAL_COLS, but used by decide_country
-    # place_src = df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str) # No longer in FINAL_COLS, but used by decide_country
     address_for_check = df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str).where(df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str).str.len() > 0, df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str))
-
     state_series       = df.get("State", pd.Series([""]*len(df), index=df.index)).astype(str)
     loc_country_series = df.get("LocCountry", pd.Series([""]*len(df), index=df.index)).astype(str)
     df["Country"] = [
@@ -233,47 +215,40 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         for addr, st, lc in zip(address_for_check, state_series, loc_country_series)
     ]
 
-    # No longer needed as n_Lati, n_Long, n_Place, n_park_nb, n_activity, n_notes are not in FINAL_COLS
-    # df["n_Lati"]  = pd.to_numeric(df.get("n_Lati"), errors="coerce").round(6)
-    # df["n_Long"]  = pd.to_numeric(df.get("n_Long"), errors="coerce").round(6)
-    # df["n_Place"] = place_src.str.replace(r"\s{2,}", " ", regex=True).str.strip(" ,")
+    # Process numeric and text columns
+    df["n_Lati"]  = pd.to_numeric(df.get("n_Lati"), errors="coerce").round(6)
+    df["n_Long"]  = pd.to_numeric(df.get("n_Long"), errors="coerce").round(6)
+    df["n_Place"] = df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str).str.replace(r"\s{2,}", " ", regex=True).str.strip(" ,")
 
-    # Timestamp conversion is still needed for 'Timestamp' and 'End Date Time' if they were in FINAL_COLS.
-    # Now only 'Timestamp' is in FINAL_COLS from the original date fields.
+    # Timestamp conversion
     df["Timestamp"]     = df["Timestamp"].apply(_to_str_timestamp)
-    # 'End Date Time' is no longer in FINAL_COLS.
-    # df["End Date Time"] = df["End Date Time"].apply(_to_str_timestamp)
+    df["End Date Time"] = df.get("End Date Time", pd.Series([None]*len(df), index=df.index)).apply(_to_str_timestamp)
 
     # Drop internal columns used for joining that shouldn't be in final output
     if '_id' in df.columns:
         df = df.drop(columns=['_id'])
 
-    # Ensure all FINAL_COLS (plus 'Status') exist, adding empty string for missing ones
-    final_output_cols = ["Status"] + [col for col in FINAL_COLS if col != "Status"]
-    for c in final_output_cols:
+    # Ensure all FINAL_COLS exist, adding empty string for missing ones
+    for c in FINAL_COLS:
         if c not in df.columns:
             df[c] = ""
     
     # Deduplicate based on journal_id which is still present at this stage
-    df = df.drop_duplicates(subset=["journal_id"], keep="last")
+    if "journal_id" in df.columns:
+        df = df.drop_duplicates(subset=["journal_id"], keep="last")
 
-    return df[final_output_cols]
+    return df[FINAL_COLS]
 
-def load_watermark_from_sheet(sheets_client, spreadsheet_id: str, sheet_name: str) -> Optional[str]:
+def load_watermark_from_file(watermark_file: str) -> Optional[str]:
     try:
-        existing = download_sheet_data(sheets_client, spreadsheet_id, sheet_name)
-        if existing.empty or "journal_id" not in existing.columns:
-            return None
-        oids = []
-        for s in existing["journal_id"].astype(str):
-            try:
-                oids.append(ObjectId(s))
-            except Exception:
-                continue
-        return str(max(oids)) if oids else None
-    except Exception as e:
-        log.warning("Could not read watermark from Google Sheet: %s", e)
+        with open(watermark_file, "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
         return None
+
+def save_watermark_to_file(watermark_file: str, last_oid: str):
+    with open(watermark_file, "w") as f:
+        f.write(str(last_oid))
 
 def fetch(db, last_oid: Optional[str]) -> Tuple[pd.DataFrame, Optional[str]]:
     match = {"end_time": {"$ne": None}}
@@ -285,6 +260,57 @@ def fetch(db, last_oid: Optional[str]) -> Tuple[pd.DataFrame, Optional[str]]:
     docs = list(db[JOURNALS_COL].aggregate(agg_pipeline(match)))
     return pd.DataFrame(docs), (docs[-1]["journal_id"] if docs else None)
 
+def send_email_report(cfg: Dict, new_data: pd.DataFrame):
+    if new_data.empty:
+        log.info("No new data to email.")
+        return
+
+    smtp_host = _require(cfg, "SMTP_HOST")
+    smtp_port = int(_require(cfg, "SMTP_PORT"))
+    smtp_user = _require(cfg, "SMTP_USER")
+    smtp_pass = _require(cfg, "SMTP_PASS")
+    from_addr = _require(cfg, "EMAIL_FROM")
+    to_addrs  = [addr.strip() for addr in _require(cfg, "EMAIL_TO").split(",")]
+
+    subject = f"Nature Counter Daily Report - {pd.to_datetime('today').strftime('%Y-%m-%d')}"
+    
+    # Format the DataFrame as an HTML table
+    html_body = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: sans-serif; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #dddddd; text-align: left; padding: 8px; }}
+            tr:nth-child(even) {{ background-color: #f2f2f2; }}
+            th {{ background-color: #4CAF50; color: white; }}
+        </style>
+    </head>
+    <body>
+        <h2>Nature Counter Daily Incremental Report</h2>
+        <p>Found {len(new_data)} new journal entries.</p>
+        {new_data.to_html(index=False, na_rep="")}
+    </body>
+    </html>
+    """
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From'] = from_addr
+    msg['To'] = ", ".join(to_addrs)
+    
+    msg.attach(MIMEText(html_body, 'html'))
+
+    try:
+        log.info(f"Connecting to SMTP server {smtp_host}:{smtp_port}...")
+        with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(from_addr, to_addrs, msg.as_string())
+            log.info(f"Email report sent successfully to: {', '.join(to_addrs)}")
+    except Exception as e:
+        log.error(f"Failed to send email report. Error: {e}")
+
+
 def run_once(cfg: Dict = None):
     """
     Runs one end-to-end pass using cfg (dict) or env vars.
@@ -294,8 +320,9 @@ def run_once(cfg: Dict = None):
     cfg = cfg or {}
     mongo_uri      = _require(cfg, "MONGO_URI")
     spreadsheet_id = _require(cfg, "SPREADSHEET_ID")
-    sheet_name     = cfg.get("SHEET_NAME") or os.getenv("SHEET_NAME", "sheet1") # Use user's confirmed sheet name
+    sheet_name     = _require(cfg, "SHEET_NAME")
     run_mode       = (cfg.get("RUN_MODE") or os.getenv("RUN_MODE", "inc")).lower()
+    watermark_file = "watermark.txt"
 
     sa_path = _ensure_sa_file(cfg)
     drive, sheets, sa_email = _google_client(sa_path) # drive client is no longer used but kept for now
@@ -313,20 +340,26 @@ def run_once(cfg: Dict = None):
         raise SystemExit(f"Google Sheet not accessible. Share {spreadsheet_id} with {sa_email} (Editor). Details: {e}")
 
     db = client[DB_NAME]
-    last_oid = None if run_mode == "full" else load_watermark_from_sheet(sheets, spreadsheet_id, sheet_name)
+    last_oid = None if run_mode == "full" else load_watermark_from_file(watermark_file)
 
-    raw, _ = fetch(db, last_oid)
+    raw, new_last_oid = fetch(db, last_oid)
     if raw is None or raw.empty:
         log.info("ℹ️ No new data; nothing to upload.")
+        # Send an email even if there's no new data, if configured
+        if cfg.get("EMAIL_ON_NO_NEW_DATA"):
+            send_email_report(cfg, pd.DataFrame())
         return
 
     cleaned = clean(raw)
-    existing = download_sheet_data(sheets, spreadsheet_id, sheet_name)
-    out = pd.concat([existing, cleaned], ignore_index=True) if not existing.empty else cleaned
-    out = clean(out)
-
-    write_to_sheet(sheets, spreadsheet_id, sheet_name, out)
-    log.info("✅ Successfully wrote %d rows to sheet.", len(out))
+    
+    append_to_sheet(sheets, spreadsheet_id, sheet_name, cleaned)
+    send_email_report(cfg, cleaned)
+    
+    if new_last_oid:
+        save_watermark_to_file(watermark_file, new_last_oid)
+        log.info(f"✅ Successfully wrote {len(cleaned)} rows to sheet and saved new watermark: {new_last_oid}")
+    else:
+        log.info(f"✅ Successfully wrote {len(cleaned)} rows to sheet.")
 
 if __name__ == "__main__":
     # Fallback to env-only run
