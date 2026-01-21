@@ -86,7 +86,8 @@ def find_file_id(drive, name: str, folder: str) -> Optional[str]:
 def append_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.DataFrame) -> None:
     try:
         # Check if the sheet is empty to decide if we need to add headers
-        result = sheets_client.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=sheet_name).execute()
+        range_to_check = f"{sheet_name}!A1:A1"
+        result = sheets_client.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_check).execute()
         is_empty = not result.get('values')
 
         data_to_write = []
@@ -368,6 +369,7 @@ if __name__ == "__main__":
         "DRIVE_FOLDER_ID": os.getenv("DRIVE_FOLDER_ID"),
         "OUTPUT_NAME":     os.getenv("OUTPUT_NAME", "NC-DA-Journal-Data.xlsx"),
         "RUN_MODE":        os.getenv("RUN_MODE", "inc"),
+        "SHEET_NAME":      os.getenv("SHEET_NAME", "Sheet1"),
         "SA_JSON_PATH":    os.getenv("SA_JSON_PATH", "drive-sa.json"),
         "DRIVE_SA_JSON":   os.getenv("DRIVE_SA_JSON", ""),
     }
