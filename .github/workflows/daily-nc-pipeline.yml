@@ -21,12 +21,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cache watermark file
-        uses: actions/cache@v3
-        with:
-          path: watermark.txt
-          key: ${{ runner.os }}-watermark
-
       # Gate only scheduled runs by Pacific hour; manual runs skip this gate
       - name: Determine Pacific Time execution window
         if: github.event_name == 'schedule'
