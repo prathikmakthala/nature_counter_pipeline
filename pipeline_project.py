@@ -56,11 +56,83 @@ def _ensure_sa_file(cfg: Dict) -> str:
 def _google_client(sa_path: str):
     creds = Credentials.from_service_account_file(
         sa_path,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"] # Added drive scope for sheet creation
     )
     sheets_client = build("sheets", "v4", credentials=creds)
     sa_email = json.load(open(sa_path))["client_email"]
     return sheets_client, sa_email
+
+def ensure_sheet_exists(sheets_client, spreadsheet_id: str, sheet_name: str) -> None:
+    """Ensures a given sheet exists in the spreadsheet, creating it if it doesn't."""
+    try:
+        spreadsheet = sheets_client.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        sheet_titles = [s['properties']['title'] for s in spreadsheet.get('sheets', [])]
+
+        if sheet_name not in sheet_titles:
+            log.info(f"Sheet '{sheet_name}' not found. Creating it...")
+            body = {
+                'requests': [{
+                    'addSheet': {
+                        'properties': {'title': sheet_name}
+                    }
+                }]
+            }
+            sheets_client.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+            log.info(f"Sheet '{sheet_name}' created successfully.")
+        else:
+            log.info(f"Sheet '{sheet_name}' already exists.")
+
+    except HttpError as e:
+        log.error(f"An error occurred while ensuring sheet '{sheet_name}' exists: %s", e)
+        raise e
+
+def ensure_sheet_exists(sheets_client, spreadsheet_id: str, sheet_name: str) -> None:
+    """Ensures a given sheet exists in the spreadsheet, creating it if it doesn't."""
+    try:
+        spreadsheet = sheets_client.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        sheet_titles = [s['properties']['title'] for s in spreadsheet.get('sheets', [])]
+
+        if sheet_name not in sheet_titles:
+            log.info(f"Sheet '{sheet_name}' not found. Creating it...")
+            body = {
+                'requests': [{
+                    'addSheet': {
+                        'properties': {'title': sheet_name}
+                    }
+                }]
+            }
+            sheets_client.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+            log.info(f"Sheet '{sheet_name}' created successfully.")
+        else:
+            log.info(f"Sheet '{sheet_name}' already exists.")
+
+    except HttpError as e:
+        log.error(f"An error occurred while ensuring sheet '{sheet_name}' exists: %s", e)
+        raise e
+
+def ensure_sheet_exists(sheets_client, spreadsheet_id: str, sheet_name: str) -> None:
+    """Ensures a given sheet exists in the spreadsheet, creating it if it doesn't."""
+    try:
+        spreadsheet = sheets_client.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        sheet_titles = [s['properties']['title'] for s in spreadsheet.get('sheets', [])]
+
+        if sheet_name not in sheet_titles:
+            log.info(f"Sheet '{sheet_name}' not found. Creating it...")
+            body = {
+                'requests': [{
+                    'addSheet': {
+                        'properties': {'title': sheet_name}
+                    }
+                }]
+            }
+            sheets_client.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+            log.info(f"Sheet '{sheet_name}' created successfully.")
+        else:
+            log.info(f"Sheet '{sheet_name}' already exists.")
+
+    except HttpError as e:
+        log.error(f"An error occurred while ensuring sheet '{sheet_name}' exists: %s", e)
+        raise e
 
 def append_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.DataFrame) -> None:
     try:
@@ -274,6 +346,9 @@ def run_once(cfg: Dict = None):
         sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
     except HttpError as e:
         raise SystemExit(f"Google Sheet not accessible. Share {spreadsheet_id} with {sa_email} (Editor). Details: {e}")
+
+    # Ensure the main data sheet exists
+    ensure_sheet_exists(sheets_client, spreadsheet_id, sheet_name)
 
     db = client[DB_NAME]
 
