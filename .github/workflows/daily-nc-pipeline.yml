@@ -12,7 +12,7 @@ jobs:
     env:
       MONGO_URI: ${{ secrets.MONGO_URI }}
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-      SHEET_NAME: 'journal'
+      SHEET_NAME: 'Sheet1'
       RUN_MODE: inc
       SA_JSON_PATH: drive-sa.json
       DRIVE_SA_JSON: ${{ secrets.DRIVE_SA_JSON }}
