@@ -41,7 +41,7 @@ NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY PR GU VI
 FINAL_COLS = [
     "Status", "User Name", "User email", "Timestamp", "n_Duration", "End Date Time",
     "n_Name", "City", "State", "Zip", "Country", "n_Place", "n_Lati", "n_Long",
-    "n_park_nb", "n_activity", "n_notes"
+    "n_park_nb", "n_activity", "n_notes", "journal_id"
 ]
 
 def _require(cfg: Dict, key: str) -> str:
@@ -234,8 +234,9 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = ""
     
-    # Deduplicate based on a combination of columns that should be unique
-    df = df.drop_duplicates(subset=['User email', 'Timestamp', 'n_Name'], keep="last")
+    # Deduplicate based on journal_id which is still present at this stage
+    if "journal_id" in df.columns:
+        df = df.drop_duplicates(subset=["journal_id"], keep="last")
 
     return df[FINAL_COLS]
 
