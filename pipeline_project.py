@@ -234,9 +234,8 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = ""
     
-    # Deduplicate based on journal_id which is still present at this stage
-    if "journal_id" in df.columns:
-        df = df.drop_duplicates(subset=["journal_id"], keep="last")
+    # Deduplicate based on a combination of columns that should be unique
+    df = df.drop_duplicates(subset=['User email', 'Timestamp', 'n_Name'], keep="last")
 
     return df[FINAL_COLS]
 
