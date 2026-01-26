@@ -1,7 +1,7 @@
 # pipeline.py
 # Nature Counter: Journals → Google Sheet
 # - Core logic only. No hard-coded credentials.
-# - Idempotent design: uses a separate 'watermark' sheet to track processed records.
+# - Idempotent design: checks destination sheet for existing records before appending.
 
 import os
 import json
@@ -10,7 +10,7 @@ import re
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Dict
+from typing import Optional, Tuple, Dict
 
 import pandas as pd
 from pymongo import MongoClient
@@ -29,11 +29,13 @@ AL AK AZ AR CA CO CT DC DE FL GA HI ID IL IN IA KS KY LA MA MD ME MI MN MO MS MT
 NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY PR GU VI
 """.split())
 
+# journal_id is the final column and is used for de-duplication
 FINAL_COLS = [
     "Status", "User Name", "User email", "Timestamp", "n_Duration", "End Date Time",
     "n_Name", "City", "State", "Zip", "Country", "n_Place", "n_Lati", "n_Long",
-    "n_park_nb", "n_activity", "n_notes"
+    "n_park_nb", "n_activity", "n_notes", "journal_id"
 ]
+JOURNAL_ID_COL_LETTER = 'R' # Column R is the 18th column, where journal_id resides
 
 def _require(cfg: Dict, key: str) -> str:
     v = cfg.get(key) or os.getenv(key)
@@ -60,58 +62,43 @@ def _google_client(sa_path: str):
     sa_email = json.load(open(sa_path))["client_email"]
     return sheets_client, sa_email
 
-def sync_to_sheets(sheets_client, spreadsheet_id: str, data_sheet_name: str, watermark_sheet_name: str, df: pd.DataFrame) -> None:
+def append_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.DataFrame) -> None:
     try:
-        # 1. Get all existing journal_ids from the watermark sheet to prevent duplicates.
-        range_to_get_ids = f"{watermark_sheet_name}!A:A"
+        # Get all existing journal_ids from the sheet to prevent duplicates.
+        # This is the core of the idempotent design.
+        range_to_get_ids = f"{sheet_name}!{JOURNAL_ID_COL_LETTER}2:{JOURNAL_ID_COL_LETTER}" # Start from row 2 to skip header
         result = sheets_client.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_get_ids).execute()
         values = result.get('values', [])
-        existing_ids = {item[0] for item in values if item}
-        log.info(f"Found {len(existing_ids)} existing record IDs in '{watermark_sheet_name}' sheet.")
+        existing_ids = {item[0] for item in values if item} # Use a set for efficient lookup
 
-        # 2. Filter the DataFrame to only include rows with journal_ids not already in the sheet.
+        # Filter the DataFrame to only include rows with journal_ids not already in the sheet.
         df_to_append = df[~df['journal_id'].isin(existing_ids)]
 
         if df_to_append.empty:
             log.info("ℹ️ No new records to append to the sheet.")
             return
 
-        log.info(f"Found {len(df_to_append)} new records to add.")
-        
-        # 3. Append the new data records (without journal_id) to the main data sheet.
-        data_to_write_df = df_to_append[FINAL_COLS]
-        
-        range_to_check_A1 = f"{data_sheet_name}!A1:A1"
+        # Check if the sheet is completely empty to decide if we need to add headers
+        range_to_check_A1 = f"{sheet_name}!A1:A1"
         result_A1 = sheets_client.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_check_A1).execute()
-        is_data_sheet_empty = not result_A1.get('values')
+        is_sheet_empty = not result_A1.get('values')
 
         data_to_write = []
-        if is_data_sheet_empty:
-            data_to_write.append(data_to_write_df.columns.values.tolist())
-        data_to_write.extend(data_to_write_df.values.tolist())
+        if is_sheet_empty:
+            data_to_write.append(df_to_append.columns.values.tolist())
+
+        data_to_write.extend(df_to_append.values.tolist())
 
         body = {'values': data_to_write}
-        sheets_client.spreadsheets().values().append(
+        result = sheets_client.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
-            range=f"{data_sheet_name}!A1",
+            range=f"{sheet_name}!A1",
             valueInputOption='USER_ENTERED',
             insertDataOption='INSERT_ROWS',
             body=body
         ).execute()
-        log.info(f"✅ Appended {len(df_to_append)} new records to '{data_sheet_name}'.")
-
-        # 4. Append the new journal_ids to the watermark sheet.
-        new_ids_to_write = [[jid] for jid in df_to_append['journal_id']]
-        body_ids = {'values': new_ids_to_write}
-        sheets_client.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id,
-            range=f"{watermark_sheet_name}!A1",
-            valueInputOption='USER_ENTERED',
-            insertDataOption='INSERT_ROWS',
-            body=body_ids
-        ).execute()
-        log.info(f"✅ Updated '{watermark_sheet_name}' sheet with {len(new_ids_to_write)} new journal_ids.")
-
+        log.info("Google Sheets API response: %s", result)
+        log.info("✅ %d new records appended to sheet.", len(df_to_append))
     except HttpError as e:
         log.error("An error occurred writing to the sheet: %s", e)
         raise e
@@ -178,13 +165,16 @@ def _to_str_timestamp(x):
         return str(x)
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
+    # This function is now greatly simplified as de-duplication is handled later.
     if df is None or df.empty:
         return pd.DataFrame(columns=FINAL_COLS)
     df = df.copy()
 
+    # Add the blank Status column as the first column, if it doesn't exist
     if "Status" not in df.columns:
         df.insert(0, "Status", "")
 
+    # Retain only necessary processing for `Country`
     address_for_check = df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str).where(df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str).str.len() > 0, df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str))
     state_series       = df.get("State", pd.Series([""]*len(df), index=df.index)).astype(str)
     loc_country_series = df.get("LocCountry", pd.Series([""]*len(df), index=df.index)).astype(str)
@@ -193,22 +183,25 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         for addr, st, lc in zip(address_for_check, state_series, loc_country_series)
     ]
 
+    # Process numeric and text columns
     df["n_Lati"]  = pd.to_numeric(df.get("n_Lati"), errors="coerce").round(6)
     df["n_Long"]  = pd.to_numeric(df.get("n_Long"), errors="coerce").round(6)
     df["n_Place"] = df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str).str.replace(r"\s{2,}", " ", regex=True).str.strip(" ,")
 
+    # Timestamp conversion
     df["Timestamp"]     = df["Timestamp"].apply(_to_str_timestamp)
     df["End Date Time"] = df.get("End Date Time", pd.Series([None]*len(df), index=df.index)).apply(_to_str_timestamp)
 
+    # Drop internal columns used for joining that shouldn't be in final output
     if '_id' in df.columns:
         df = df.drop(columns=['_id'])
 
+    # Ensure all FINAL_COLS exist, adding empty string for missing ones
     for c in FINAL_COLS:
         if c not in df.columns:
             df[c] = ""
-            
-    # Return the full dataframe including journal_id for processing
-    return df
+
+    return df[FINAL_COLS]
 
 def fetch(db) -> pd.DataFrame:
     """Fetches all journal documents from the database."""
@@ -259,14 +252,13 @@ def send_email_report(cfg: Dict, new_data: pd.DataFrame):
 def run_once(cfg: Dict = None):
     """
     Runs one end-to-end pass using cfg (dict) or env vars.
-    This process is idempotent. It uses a dedicated 'watermark' sheet
-    to track processed records and only appends new ones.
+    This process is idempotent. It checks the destination sheet for existing
+    journal_ids and only appends records that are not already present.
     """
     cfg = cfg or {}
     mongo_uri      = _require(cfg, "MONGO_URI")
     spreadsheet_id = _require(cfg, "SPREADSHEET_ID")
-    data_sheet_name = _require(cfg, "SHEET_NAME")
-    watermark_sheet_name = "watermark" # Hardcoded as per user request
+    sheet_name     = _require(cfg, "SHEET_NAME")
 
     sa_path = _ensure_sa_file(cfg)
     sheets, sa_email = _google_client(sa_path)
@@ -292,11 +284,13 @@ def run_once(cfg: Dict = None):
 
     cleaned = clean(raw_data)
 
-    sync_to_sheets(sheets, spreadsheet_id, data_sheet_name, watermark_sheet_name, cleaned)
-    
+    append_to_sheet(sheets, spreadsheet_id, sheet_name, cleaned)
+    # send_email_report(cfg, cleaned) # Kept commented out as in original
+
     log.info("✅ Pipeline run finished.")
 
 if __name__ == "__main__":
+    # Fallback to env-only run
     cfg_env = {
         "MONGO_URI":       os.getenv("MONGO_URI"),
         "SPREADSHEET_ID":  os.getenv("SPREADSHEET_ID"),
