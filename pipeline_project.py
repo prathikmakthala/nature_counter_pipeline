@@ -201,6 +201,12 @@ def _to_str_timestamp(x):
 def clean(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=FINAL_COLS)
+    
+    # First, remove any duplicates based on the unique database ID.
+    # This is the most reliable way to prevent reprocessing records during a rerun.
+    if "journal_id" in df.columns:
+        df = df.drop_duplicates(subset=["journal_id"], keep="last")
+
     df = df.copy()
 
     # Add the blank Status column as the first column, if it doesn't exist
@@ -234,10 +240,6 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = ""
     
-    # Deduplicate based on journal_id which is still present at this stage
-    if "journal_id" in df.columns:
-        df = df.drop_duplicates(subset=["journal_id"], keep="last")
-
     return df[FINAL_COLS]
 
 def load_watermark_from_file(watermark_file: str) -> Optional[str]:
