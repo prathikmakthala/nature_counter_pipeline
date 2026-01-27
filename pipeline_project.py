@@ -86,54 +86,6 @@ def ensure_sheet_exists(sheets_client, spreadsheet_id: str, sheet_name: str) -> 
         log.error(f"An error occurred while ensuring sheet '{sheet_name}' exists: %s", e)
         raise e
 
-def ensure_sheet_exists(sheets_client, spreadsheet_id: str, sheet_name: str) -> None:
-    """Ensures a given sheet exists in the spreadsheet, creating it if it doesn't."""
-    try:
-        spreadsheet = sheets_client.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        sheet_titles = [s['properties']['title'] for s in spreadsheet.get('sheets', [])]
-
-        if sheet_name not in sheet_titles:
-            log.info(f"Sheet '{sheet_name}' not found. Creating it...")
-            body = {
-                'requests': [{
-                    'addSheet': {
-                        'properties': {'title': sheet_name}
-                    }
-                }]
-            }
-            sheets_client.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
-            log.info(f"Sheet '{sheet_name}' created successfully.")
-        else:
-            log.info(f"Sheet '{sheet_name}' already exists.")
-
-    except HttpError as e:
-        log.error(f"An error occurred while ensuring sheet '{sheet_name}' exists: %s", e)
-        raise e
-
-def ensure_sheet_exists(sheets_client, spreadsheet_id: str, sheet_name: str) -> None:
-    """Ensures a given sheet exists in the spreadsheet, creating it if it doesn't."""
-    try:
-        spreadsheet = sheets_client.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        sheet_titles = [s['properties']['title'] for s in spreadsheet.get('sheets', [])]
-
-        if sheet_name not in sheet_titles:
-            log.info(f"Sheet '{sheet_name}' not found. Creating it...")
-            body = {
-                'requests': [{
-                    'addSheet': {
-                        'properties': {'title': sheet_name}
-                    }
-                }]
-            }
-            sheets_client.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
-            log.info(f"Sheet '{sheet_name}' created successfully.")
-        else:
-            log.info(f"Sheet '{sheet_name}' already exists.")
-
-    except HttpError as e:
-        log.error(f"An error occurred while ensuring sheet '{sheet_name}' exists: %s", e)
-        raise e
-
 def append_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.DataFrame) -> None:
     try:
         # Get all existing journal_ids from the sheet to prevent duplicates.
