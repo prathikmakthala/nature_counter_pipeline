@@ -2,6 +2,7 @@
 # Nature Counter: Journals → Google Sheet
 # - Core logic only. No hard-coded credentials.
 # - Idempotent design: checks destination sheet for existing records before appending.
+# - Auto-creates main data sheet if not present.
 
 import os
 import json
@@ -10,7 +11,7 @@ import re
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Optional, Tuple, Dict
+from typing import Dict
 
 import pandas as pd
 from pymongo import MongoClient
@@ -56,7 +57,7 @@ def _ensure_sa_file(cfg: Dict) -> str:
 def _google_client(sa_path: str):
     creds = Credentials.from_service_account_file(
         sa_path,
-        scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"] # Added drive scope for sheet creation
+        scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     )
     sheets_client = build("sheets", "v4", credentials=creds)
     sa_email = json.load(open(sa_path))["client_email"]
@@ -88,12 +89,13 @@ def ensure_sheet_exists(sheets_client, spreadsheet_id: str, sheet_name: str) -> 
 
 def append_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.DataFrame) -> None:
     try:
+        journal_id_col_index = FINAL_COLS.index('journal_id') # 0-based index
+        # This function works robustly if FINAL_COLS is used correctly
         # Get all existing journal_ids from the sheet to prevent duplicates.
-        # This is the core of the idempotent design.
-        range_to_get_ids = f"{sheet_name}!{JOURNAL_ID_COL_LETTER}2:{JOURNAL_ID_COL_LETTER}" # Start from row 2 to skip header
+        range_to_get_ids = f"{sheet_name}!{chr(ord('A') + journal_id_col_index)}2:{chr(ord('A') + journal_id_col_index)}" # Dynamically get column letter for journal_id
         result = sheets_client.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_get_ids).execute()
         values = result.get('values', [])
-        existing_ids = {item[0] for item in values if item} # Use a set for efficient lookup
+        existing_ids = {item[0] for item in values if item}
 
         # Filter the DataFrame to only include rows with journal_ids not already in the sheet.
         df_to_append = df[~df['journal_id'].isin(existing_ids)]
@@ -110,18 +112,17 @@ def append_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.
         data_to_write = []
         if is_sheet_empty:
             data_to_write.append(df_to_append.columns.values.tolist())
-
+        
         data_to_write.extend(df_to_append.values.tolist())
 
         body = {'values': data_to_write}
-        result = sheets_client.spreadsheets().values().append(
+        sheets_client.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
-            range=f"{sheet_name}!A1",
+            range=f"{sheet_name}!A1", # Append will find the next empty row
             valueInputOption='USER_ENTERED',
             insertDataOption='INSERT_ROWS',
             body=body
         ).execute()
-        log.info("Google Sheets API response: %s", result)
         log.info("✅ %d new records appended to sheet.", len(df_to_append))
     except HttpError as e:
         log.error("An error occurred writing to the sheet: %s", e)
@@ -189,16 +190,13 @@ def _to_str_timestamp(x):
         return str(x)
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
-    # This function is now greatly simplified as de-duplication is handled later.
     if df is None or df.empty:
         return pd.DataFrame(columns=FINAL_COLS)
     df = df.copy()
 
-    # Add the blank Status column as the first column, if it doesn't exist
     if "Status" not in df.columns:
         df.insert(0, "Status", "")
 
-    # Retain only necessary processing for `Country`
     address_for_check = df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str).where(df.get("Address", pd.Series([""]*len(df), index=df.index)).astype(str).str.len() > 0, df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str))
     state_series       = df.get("State", pd.Series([""]*len(df), index=df.index)).astype(str)
     loc_country_series = df.get("LocCountry", pd.Series([""]*len(df), index=df.index)).astype(str)
@@ -207,24 +205,19 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         for addr, st, lc in zip(address_for_check, state_series, loc_country_series)
     ]
 
-    # Process numeric and text columns
     df["n_Lati"]  = pd.to_numeric(df.get("n_Lati"), errors="coerce").round(6)
     df["n_Long"]  = pd.to_numeric(df.get("n_Long"), errors="coerce").round(6)
     df["n_Place"] = df.get("n_Place", pd.Series([""]*len(df), index=df.index)).astype(str).str.replace(r"\s{2,}", " ", regex=True).str.strip(" ,")
 
-    # Timestamp conversion
     df["Timestamp"]     = df["Timestamp"].apply(_to_str_timestamp)
     df["End Date Time"] = df.get("End Date Time", pd.Series([None]*len(df), index=df.index)).apply(_to_str_timestamp)
 
-    # Drop internal columns used for joining that shouldn't be in final output
     if '_id' in df.columns:
         df = df.drop(columns=['_id'])
 
-    # Ensure all FINAL_COLS exist, adding empty string for missing ones
     for c in FINAL_COLS:
         if c not in df.columns:
             df[c] = ""
-
     return df[FINAL_COLS]
 
 def fetch(db) -> pd.DataFrame:
@@ -276,33 +269,34 @@ def send_email_report(cfg: Dict, new_data: pd.DataFrame):
 def run_once(cfg: Dict = None):
     """
     Runs one end-to-end pass using cfg (dict) or env vars.
-    This process is idempotent. It checks the destination sheet for existing
-    journal_ids and only appends records that are not already present.
+    This process is idempotent. It ensures the destination sheet exists,
+    then checks for existing journal_ids and only appends records that are not already present.
     """
     cfg = cfg or {}
     mongo_uri      = _require(cfg, "MONGO_URI")
     spreadsheet_id = _require(cfg, "SPREADSHEET_ID")
     sheet_name     = _require(cfg, "SHEET_NAME")
 
+    # Initialize Google client first
     sa_path = _ensure_sa_file(cfg)
-    sheets, sa_email = _google_client(sa_path)
+    sheets_client, sa_email = _google_client(sa_path)
 
-    # Connectivity checks
+    # Check connectivity and ensure sheet exists
+    try:
+        # Check general sheet access
+        sheets_client.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        # Ensure the main data sheet exists (this needs to happen AFTER general sheet access check)
+        ensure_sheet_exists(sheets_client, spreadsheet_id, sheet_name)
+    except HttpError as e:
+        raise SystemExit(f"Google Sheet not accessible or could not be created. Share {spreadsheet_id} with {sa_email} (Editor). Details: {e}")
+
+    # Check for Mongo connectivity
     try:
         client = MongoClient(mongo_uri, tz_aware=True)
         client.admin.command("ping")
+        db = client[DB_NAME]
     except Exception as e:
         raise SystemExit(f"Mongo connection failed. Check MONGO_URI. Details: {e}")
-
-    try:
-        sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    except HttpError as e:
-        raise SystemExit(f"Google Sheet not accessible. Share {spreadsheet_id} with {sa_email} (Editor). Details: {e}")
-
-    # Ensure the main data sheet exists
-    ensure_sheet_exists(sheets_client, spreadsheet_id, sheet_name)
-
-    db = client[DB_NAME]
 
     raw_data = fetch(db)
     if raw_data.empty:
@@ -311,7 +305,7 @@ def run_once(cfg: Dict = None):
 
     cleaned = clean(raw_data)
 
-    append_to_sheet(sheets, spreadsheet_id, sheet_name, cleaned)
+    append_to_sheet(sheets_client, spreadsheet_id, sheet_name, cleaned)
     # send_email_report(cfg, cleaned) # Kept commented out as in original
 
     log.info("✅ Pipeline run finished.")
