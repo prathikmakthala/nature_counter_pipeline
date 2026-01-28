@@ -68,8 +68,9 @@ def ensure_sheet_exists(sheets_client, spreadsheet_id: str, sheet_name: str) -> 
     try:
         spreadsheet = sheets_client.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
         sheet_titles = [s['properties']['title'] for s in spreadsheet.get('sheets', [])]
-
-        if sheet_name not in sheet_titles:
+        
+        # Case-insensitive check
+        if sheet_name.lower() not in [title.lower() for title in sheet_titles]:
             log.info(f"Sheet '{sheet_name}' not found. Creating it...")
             body = {
                 'requests': [{
