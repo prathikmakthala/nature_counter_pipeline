@@ -185,7 +185,7 @@ def _to_str_timestamp(x):
     if x is None:
         return ""
     try:
-        return x.isoformat()
+        return x.strftime("%#m/%#d/%y %#I:%M %p")
     except Exception:
         return str(x)
 
