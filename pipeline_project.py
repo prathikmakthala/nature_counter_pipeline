@@ -34,7 +34,7 @@ NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY PR GU VI
 FINAL_COLS = [
     "Status", "User Name", "User email", "Timestamp", "n_Duration", "End Date Time",
     "n_Name", "City", "State", "Zip", "Country", "n_Place", "n_Lati", "n_Long",
-    "n_park_nb", "n_activity", "n_notes", "journal_id"
+    "n_park_nbr", "n_activity", "n_notes", "journal_id"
 ]
 JOURNAL_ID_COL_LETTER = 'R' # Column R is the 18th column, where journal_id resides
 
@@ -131,7 +131,7 @@ def append_to_sheet(sheets_client, spreadsheet_id: str, sheet_name: str, df: pd.
 def decide_country(address: str, state: str, loc_country: str) -> str:
     c = (loc_country or "").strip()
     if c:
-        if c.upper() in {"US", "USA", "U.S.", "UNITED STATES", "UNITED STATES OF AMERICA"}:
+        if c.upper() in {"USA", "U.S.", "UNITED STATES", "UNITED STATES OF AMERICA"}:
             return "USA"
         return c
     if (state or "").strip().upper() in US_STATES:
@@ -174,7 +174,7 @@ def agg_pipeline():
             "n_Place": {"$concat": [{"$ifNull": ["$loc.name", ""]}, ", ", {"$ifNull": ["$loc.city", ""]}, " ", {"$ifNull": ["$loc.stateInitials", {"$ifNull": ["$loc.state", ""]}]}]},
             "n_Lati": {"$ifNull": ["$loc.coordinates.lat", {"$ifNull": ["$loc.coordinates.latitude", "$lat_from_geojson"]}]},
             "n_Long": {"$ifNull": ["$loc.coordinates.lng", {"$ifNull": ["$loc.coordinates.longitude", "$lng_from_geojson"]}]},
-            "n_park_nb": "$loc.parkNumber",
+            "n_park_nbr": "$loc.parkNumber",
             "n_activity": {"$ifNull": ["$n_activity", ""]},
             "n_notes": {"$ifNull": ["$n_notes", ""]}
         }},
