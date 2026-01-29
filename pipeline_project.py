@@ -136,11 +136,11 @@ def decide_country(address: str, state: str, loc_country: str) -> str:
             return "USA"
         return c
     if (state or "").strip().upper() in US_STATES:
-        return "USA"
+        return "US"
     tokens = re.split(r"[^A-Za-z]+", (address or "").upper())
     tokens = [t for t in tokens if t]
     if any(t in US_STATES for t in tokens):
-        return "USA"
+        return "US"
     return ""
 
 def agg_pipeline():
